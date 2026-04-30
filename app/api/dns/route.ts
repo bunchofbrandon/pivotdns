@@ -1,61 +1,66 @@
 import { NextRequest, NextResponse } from 'next/server';
-import dns2 from 'dns2';
-import Redis from 'ioredis';
+import dns from 'dns2';
+import { Redis } from '@upstash/redis';
 
-const { Packet } = dns2;
+const redis = Redis.fromEnv();
+const CACHE_TTL = 3600; // 1 hour
 
-// Initialize Redis
-const redis = new Redis(process.env.REDIS_URL!, {
-  maxRetriesPerRequest: 3,
-  retryStrategy: (times) => Math.min(times * 100, 3000),
-});
-
-const CACHE_TTL = 300; // 5 minutes
-
-// ✅ Correct way to create UDPClient in dns2
-const resolve = dns2.UDPClient({
-  dns: '1.1.1.1',   // Cloudflare
+// Use Cloudflare as recursive upstream
+const resolver = new dns.UDPClient({
+  dns: '1.1.1.1',
   port: 53,
 });
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const name = searchParams.get('name') || searchParams.get('dns');
-  const type = (searchParams.get('type') || 'A').toUpperCase();
-
-  if (!name) {
-    return NextResponse.json({ error: 'Missing domain name' }, { status: 400 });
-  }
-
-  const cacheKey = `dns:${type}:${name.toLowerCase()}`;
-
   try {
-    // Check cache
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      return NextResponse.json(JSON.parse(cached));
+    const name = req.nextUrl.searchParams.get('name');
+    const type = req.nextUrl.searchParams.get('type') || 'A';
+
+    if (!name) {
+      return NextResponse.json({ error: 'Missing ?name= parameter' }, { status: 400 });
     }
 
-    // Resolve DNS
-    const result = await resolve(name, type as any);
+    const cacheKey = `dns:${name.toLowerCase()}:${type}`;
 
-    const response = {
+    // Check Redis cache
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      return NextResponse.json({
+        status: 'success',
+        name,
+        type,
+        answers: cached,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Recursive DNS lookup
+    const result = await resolver.resolve(name, type);
+
+    const answers = result.answers || [];
+
+    // Cache the result
+    await redis.set(cacheKey, answers, { ex: CACHE_TTL });
+
+    return NextResponse.json({
       status: 'success',
       name,
       type,
-      answers: result.answers || [],
+      answers,
       timestamp: Date.now(),
-    };
+    });
 
-    // Cache the result
-    await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
-
-    return NextResponse.json(response);
-  } catch (error: any) {
-    console.error('DNS Error:', error);
-    return NextResponse.json({ 
-      error: 'Resolution failed', 
-      message: error.message 
-    }, { status: 502 });
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json({
+      status: 'error',
+      error: err.message || 'DNS query failed'
+    }, { status: 500 });
   }
+}
+
+// Keep the old POST for compatibility if you want
+export async function POST(req: NextRequest) {
+  // You can keep your old secret-protected version here if needed
+  return NextResponse.json({ error: 'Use GET instead' }, { status: 405 });
 }

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import dns from 'dns2';
-import { Redis } from '@upstash/redis';
+import dns2 from 'dns2';
+import Redis from 'ioredis';
 
-const redis = Redis.fromEnv();
+const redis = new Redis(process.env.REDIS_URL!, {
+  maxRetriesPerRequest: 3,
+  retryStrategy: (times) => Math.min(times * 100, 3000),
+});
+
 const CACHE_TTL = 3600; // 1 hour
 
-// Use Cloudflare as recursive upstream
-const resolver = new dns.UDPClient({
+const resolver = dns2.UDPClient({
   dns: '1.1.1.1',
   port: 53,
 });
@@ -14,53 +17,41 @@ const resolver = new dns.UDPClient({
 export async function GET(req: NextRequest) {
   try {
     const name = req.nextUrl.searchParams.get('name');
-    const type = req.nextUrl.searchParams.get('type') || 'A';
+    const type = (req.nextUrl.searchParams.get('type') || 'A').toUpperCase();
 
     if (!name) {
       return NextResponse.json({ error: 'Missing ?name= parameter' }, { status: 400 });
     }
 
-    const cacheKey = `dns:${name.toLowerCase()}:${type}`;
+    const cacheKey = `dns:${type}:${name.toLowerCase()}`;
 
-    // Check Redis cache
+    // Check cache
     const cached = await redis.get(cacheKey);
     if (cached) {
-      return NextResponse.json({
-        status: 'success',
-        name,
-        type,
-        answers: cached,
-        timestamp: Date.now(),
-      });
+      return NextResponse.json(JSON.parse(cached));
     }
 
     // Recursive DNS lookup
-    const result = await resolver.resolve(name, type);
+    const result = await resolver.resolve(name, type as any);
 
-    const answers = result.answers || [];
-
-    // Cache the result
-    await redis.set(cacheKey, answers, { ex: CACHE_TTL });
-
-    return NextResponse.json({
+    const response = {
       status: 'success',
       name,
       type,
-      answers,
+      answers: result.answers || [],
       timestamp: Date.now(),
-    });
+    };
 
-  } catch (err: any) {
-    console.error(err);
+    // Cache result
+    await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
+
+    return NextResponse.json(response);
+
+  } catch (error: any) {
+    console.error('DNS Error:', error);
     return NextResponse.json({
       status: 'error',
-      error: err.message || 'DNS query failed'
+      error: error.message || 'DNS query failed'
     }, { status: 500 });
   }
-}
-
-// Keep the old POST for compatibility if you want
-export async function POST(req: NextRequest) {
-  // You can keep your old secret-protected version here if needed
-  return NextResponse.json({ error: 'Use GET instead' }, { status: 405 });
 }

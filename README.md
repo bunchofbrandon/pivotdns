@@ -1,0 +1,2 @@
+# pivotdns
+Private DoH

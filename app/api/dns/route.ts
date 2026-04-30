@@ -4,6 +4,7 @@ import Redis from 'ioredis';
 
 const { Packet } = dns2;
 
+// Initialize Redis
 const redis = new Redis(process.env.REDIS_URL!, {
   maxRetriesPerRequest: 3,
   retryStrategy: (times) => Math.min(times * 100, 3000),
@@ -11,8 +12,9 @@ const redis = new Redis(process.env.REDIS_URL!, {
 
 const CACHE_TTL = 300; // 5 minutes
 
-const resolver = new dns2.UDPClient({
-  dns: '1.1.1.1', // Cloudflare
+// ✅ Correct way to create UDPClient in dns2
+const resolve = dns2.UDPClient({
+  dns: '1.1.1.1',   // Cloudflare
   port: 53,
 });
 
@@ -34,8 +36,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(JSON.parse(cached));
     }
 
-    // Resolve
-    const result = await resolver.resolve(name, type as any);
+    // Resolve DNS
+    const result = await resolve(name, type as any);
 
     const response = {
       status: 'success',
@@ -45,7 +47,7 @@ export async function GET(req: NextRequest) {
       timestamp: Date.now(),
     };
 
-    // Cache result
+    // Cache the result
     await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
 
     return NextResponse.json(response);

@@ -7,8 +7,9 @@ const redis = new Redis(process.env.REDIS_URL!, {
   retryStrategy: (times) => Math.min(times * 100, 3000),
 });
 
-const CACHE_TTL = 3600; // 1 hour
+const CACHE_TTL = 300; // 5 minutes
 
+// Correct dns2 resolver (this is the working pattern)
 const resolver = dns2.UDPClient({
   dns: '1.1.1.1',
   port: 53,
@@ -31,8 +32,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(JSON.parse(cached));
     }
 
-    // Recursive DNS lookup
-    const result = await resolver.resolve(name, type as any);
+    // Do recursive DNS query
+    const result = await resolver(name, type as any);
 
     const response = {
       status: 'success',
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
       timestamp: Date.now(),
     };
 
-    // Cache result
+    // Cache for 5 minutes
     await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
 
     return NextResponse.json(response);

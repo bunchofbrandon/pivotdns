@@ -1,13 +1,38 @@
-import { NextRequest, NextResponse } from 'next/server';
+export const runtime = 'edge';
 
-export async function POST(req: NextRequest) {
-  const secret = req.headers.get('x-dns-secret');
-  if (secret !== process.env.DNS_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+const CLOUDFLARE_DOH = 'https://cloudflare-dns.com/dns-query';
+
+export async function GET(req) {
+  return proxyDoH(req);
+}
+
+export async function POST(req) {
+  return proxyDoH(req);
+}
+
+async function proxyDoH(req) {
+  try {
+    const headers = new Headers(req.headers);
+    headers.set('Host', 'cloudflare-dns.com');
+    headers.delete('host'); // Vercel adds its own
+
+    const response = await fetch(CLOUDFLARE_DOH, {
+      method: req.method,
+      headers: headers,
+      body: req.body,
+      duplex: 'half',
+      redirect: 'manual',
+    });
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        'Content-Type': 'application/dns-message',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  } catch (err) {
+    console.error('DoH error:', err);
+    return new Response('DoH relay failed', { status: 502 });
   }
-
-  // Instant hardcoded test response
-  return NextResponse.json({ 
-    data: ["142.250.190.78", "142.250.190.14"] 
-  });
 }

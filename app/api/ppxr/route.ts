@@ -6,9 +6,14 @@ export async function GET(req: NextRequest) {
   try {
     const url = new URL(u);
     const h = new Headers();
-    req.headers.forEach((v, k) => {
-      if (!['host','connection','content-length'].includes(k.toLowerCase())) h.set(k, v);
-    });
+    h.set('user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    h.set('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8');
+    h.set('accept-language', 'en-US,en;q=0.9');
+    h.set('accept-encoding', 'gzip, deflate, br');
+    h.set('sec-fetch-mode', 'navigate');
+    h.set('sec-fetch-site', 'none');
+    h.set('sec-fetch-dest', 'document');
+    h.set('upgrade-insecure-requests', '1');
     h.set('host', url.host);
 
     const r = await fetch(url.toString(), {
@@ -18,10 +23,10 @@ export async function GET(req: NextRequest) {
       redirect: 'follow',
     });
 
-    const rh = new Headers();
-    r.headers.forEach((v, k) => {
-      if (!['content-encoding','transfer-encoding','content-length'].includes(k.toLowerCase())) rh.set(k, v);
-    });
+    const rh = new Headers(r.headers);
+    rh.delete('content-encoding');
+    rh.delete('transfer-encoding');
+    rh.delete('content-length');
 
     return new NextResponse(await r.arrayBuffer(), {
       status: r.status,

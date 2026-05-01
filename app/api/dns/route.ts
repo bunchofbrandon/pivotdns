@@ -9,14 +9,15 @@ const redis = new Redis(process.env.REDIS_URL!, {
 
 const CACHE_TTL = 300; // 5 minutes
 
-// Correct dns2 resolver (this is the working pattern)
-const resolver = dns2.UDPClient({
+// Cloudflare for normal recursive DNS
+const publicResolver = dns2.UDPClient({
   dns: '1.1.1.1',
   port: 53,
 });
 
-// === TUNNEL PASSTHROUGH (touch Vercel only) ===
+// === TUNNEL FORWARDING (only these domains) ===
 const TUNNEL_SUFFIX = '.shoppingsystemoftheyearmonthday.autos';
+const VPS_IP = "89.167.66.221";   // ←←← REPLACE WITH YOUR REAL SERVER IP
 
 export async function GET(req: NextRequest) {
   try {
@@ -28,29 +29,26 @@ export async function GET(req: NextRequest) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // SPECIAL HANDLING FOR TUNNEL PAYLOADS
-    // (DNSTT / NoizDNS / Slipstream / VayDNS etc.)
-    // This makes the encoded payload actually reach Vercel server
-    // without touching Cloudflare recursion.
-    // Normal domains continue working exactly as before.
+    // TUNNEL PAYLOADS → forward directly to your real VPS
+    // This is the clean "touch Vercel then hand off" layer
     // ─────────────────────────────────────────────────────────────
     if (name.toLowerCase().endsWith(TUNNEL_SUFFIX)) {
-      console.log(`🚀 TUNNEL PAYLOAD TOUCHED VERCEL → ${name} (${type})`);
+      console.log(`🚀 TUNNEL PAYLOAD TOUCHED VERCEL → forwarding to VPS: ${name} (${type})`);
+
+      const realResolver = dns2.UDPClient({
+        dns: VPS_IP,
+        port: 53,
+      });
+
+      const result = await realResolver(name, type as any);
 
       const response = {
         status: 'success',
         name,
         type,
-        answers: [
-          {
-            name,
-            type: 'TXT',
-            TTL: 60,
-            data: `pivotdns-vercel-touched:${name}`,
-          },
-        ],
+        answers: result.answers || [],
         timestamp: Date.now(),
-        note: 'tunnel-payload-reached-vercel (no Cloudflare recursion)',
+        note: 'tunnel-payload-forwarded-to-real-VPS',
       };
 
       return NextResponse.json(response);
@@ -59,14 +57,14 @@ export async function GET(req: NextRequest) {
 
     const cacheKey = `dns:${type}:${name.toLowerCase()}`;
 
-    // Check cache
+    // Check cache (normal domains only)
     const cached = await redis.get(cacheKey);
     if (cached) {
       return NextResponse.json(JSON.parse(cached));
     }
 
-    // Do recursive DNS query (normal domains only)
-    const result = await resolver(name, type as any);
+    // Normal recursive resolution
+    const result = await publicResolver(name, type as any);
 
     const response = {
       status: 'success',
@@ -76,7 +74,6 @@ export async function GET(req: NextRequest) {
       timestamp: Date.now(),
     };
 
-    // Cache for 5 minutes
     await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(response));
 
     return NextResponse.json(response);
